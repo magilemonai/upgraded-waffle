@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>Numinous</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&display=swap');
@@ -12,9 +15,17 @@
   body {
     background: #000;
     overflow: hidden;
-    cursor: none;
     font-family: 'Cormorant Garamond', 'Georgia', serif;
     -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Only hide cursor on non-touch devices */
+  @media (pointer: fine) {
+    body { cursor: none; }
   }
 
   canvas#cosmos {
@@ -56,6 +67,16 @@
     text-shadow: 0 0 40px rgba(180, 160, 120, 0.15);
   }
 
+  #wisdom .text .line {
+    opacity: 0;
+    transition: opacity 2.5s ease-in;
+    display: block;
+  }
+
+  #wisdom .text .line.revealed {
+    opacity: 1;
+  }
+
   #wisdom .source {
     color: rgba(160, 145, 120, 0.5);
     font-size: clamp(0.7rem, 1.5vw, 0.9rem);
@@ -68,18 +89,23 @@
 
   #cursor-glow {
     position: fixed;
-    width: 200px; height: 200px;
+    width: 250px; height: 250px;
     border-radius: 50%;
     pointer-events: none;
     z-index: 3;
     transform: translate(-50%, -50%);
     background: radial-gradient(circle,
-      rgba(200, 180, 140, 0.06) 0%,
-      rgba(200, 180, 140, 0.02) 40%,
+      rgba(200, 180, 140, 0.05) 0%,
+      rgba(200, 180, 140, 0.015) 40%,
       transparent 70%
     );
     mix-blend-mode: screen;
-    transition: opacity 0.5s;
+    transition: opacity 1.5s, width 1.5s, height 1.5s;
+  }
+
+  /* On touch devices, hide the cursor glow (we use touch-glow instead) */
+  @media (pointer: coarse) {
+    #cursor-glow { display: none; }
   }
 
   #breathe {
@@ -88,11 +114,17 @@
     left: 50%;
     transform: translateX(-50%);
     z-index: 2;
-    color: rgba(160, 145, 120, 0.2);
+    color: rgba(160, 145, 120, 0.25);
     font-size: 0.7rem;
     letter-spacing: 0.3em;
     text-transform: lowercase;
     pointer-events: none;
+    opacity: 0;
+    transition: opacity 3s ease-in-out;
+  }
+
+  #breathe.visible {
+    opacity: 1;
     animation: breathe-text 8s ease-in-out infinite;
   }
 
@@ -110,27 +142,45 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-direction: column;
     cursor: pointer;
-    transition: opacity 3s ease-out;
-  }
-
-  #threshold.dissolving {
-    opacity: 0;
-    pointer-events: none;
   }
 
   #threshold .enter-text {
-    color: rgba(180, 165, 135, 0.4);
+    color: rgba(180, 165, 135, 0);
     font-size: clamp(0.8rem, 2vw, 1.1rem);
     letter-spacing: 0.25em;
     font-weight: 300;
-    animation: pulse-soft 4s ease-in-out infinite;
+    transition: color 4s ease-in, opacity 4s ease-in;
     cursor: pointer;
   }
 
+  #threshold.text-visible .enter-text {
+    color: rgba(180, 165, 135, 0.35);
+    animation: pulse-soft 6s ease-in-out infinite;
+  }
+
+  #threshold.dissolving {
+    pointer-events: none;
+  }
+
+  #threshold.dissolving .enter-text {
+    opacity: 0;
+    transition: opacity 1.5s ease-out;
+  }
+
+  #threshold-ring {
+    position: fixed;
+    border-radius: 50%;
+    border: 1px solid rgba(180, 165, 135, 0.3);
+    pointer-events: none;
+    z-index: 11;
+    opacity: 0;
+  }
+
   @keyframes pulse-soft {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 0.7; }
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.55; }
   }
 </style>
 </head>
@@ -139,6 +189,7 @@
 <div id="threshold">
   <span class="enter-text">enter the silence</span>
 </div>
+<div id="threshold-ring"></div>
 
 <canvas id="cosmos"></canvas>
 <div id="veil"></div>
@@ -150,6 +201,117 @@
 <div id="breathe">be still</div>
 
 <script>
+// ─── Generative Sound ───
+// All sound is synthesized — no external files needed.
+
+let audioCtx = null;
+let droneGain = null;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // Master gain
+  const master = audioCtx.createGain();
+  master.gain.value = 0;
+  master.connect(audioCtx.destination);
+
+  // Fade master in slowly
+  master.gain.linearRampToValueAtTime(0, audioCtx.currentTime);
+  master.gain.linearRampToValueAtTime(0.35, audioCtx.currentTime + 8);
+
+  droneGain = master;
+
+  // Base drone — low fundamental
+  const drone1 = audioCtx.createOscillator();
+  drone1.type = 'sine';
+  drone1.frequency.value = 55; // A1
+  const d1Gain = audioCtx.createGain();
+  d1Gain.gain.value = 0.12;
+  drone1.connect(d1Gain);
+  d1Gain.connect(master);
+  drone1.start();
+
+  // Second drone — perfect fifth above, detuned slightly
+  const drone2 = audioCtx.createOscillator();
+  drone2.type = 'sine';
+  drone2.frequency.value = 82.5; // ~E2, slightly flat
+  const d2Gain = audioCtx.createGain();
+  d2Gain.gain.value = 0.06;
+  drone2.connect(d2Gain);
+  d2Gain.connect(master);
+  drone2.start();
+
+  // LFO for gentle breathing
+  const lfo = audioCtx.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 0.06; // one breath every ~16 seconds
+  const lfoGain = audioCtx.createGain();
+  lfoGain.gain.value = 0.03;
+  lfo.connect(lfoGain);
+  lfoGain.connect(d1Gain.gain);
+  lfo.start();
+
+  // Occasional harmonic overtones
+  function spawnOvertone() {
+    const harmonics = [110, 165, 220, 330, 440];
+    const freq = harmonics[Math.random() * harmonics.length | 0];
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq + (Math.random() - 0.5) * 2;
+
+    const env = audioCtx.createGain();
+    env.gain.value = 0;
+    const peakVol = 0.015 + Math.random() * 0.015;
+    const now = audioCtx.currentTime;
+    env.gain.linearRampToValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(peakVol, now + 3);
+    env.gain.linearRampToValueAtTime(0, now + 8 + Math.random() * 6);
+
+    osc.connect(env);
+    env.connect(master);
+    osc.start(now);
+    osc.stop(now + 15);
+
+    // Next overtone in 8-20 seconds
+    setTimeout(spawnOvertone, 8000 + Math.random() * 12000);
+  }
+  setTimeout(spawnOvertone, 3000);
+}
+
+function playBell() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+
+  // Bell: sine with quick attack, long decay
+  const osc = audioCtx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.value = 528; // C5-ish, "healing" frequency
+
+  const env = audioCtx.createGain();
+  env.gain.value = 0;
+  env.gain.linearRampToValueAtTime(0.08, now + 0.01);
+  env.gain.exponentialRampToValueAtTime(0.001, now + 6);
+
+  // Slight detune second partial
+  const osc2 = audioCtx.createOscillator();
+  osc2.type = 'sine';
+  osc2.frequency.value = 528 * 2.01;
+  const env2 = audioCtx.createGain();
+  env2.gain.value = 0;
+  env2.gain.linearRampToValueAtTime(0.03, now + 0.01);
+  env2.gain.exponentialRampToValueAtTime(0.001, now + 4);
+
+  osc.connect(env);
+  osc2.connect(env2);
+  env.connect(droneGain || audioCtx.destination);
+  env2.connect(droneGain || audioCtx.destination);
+  osc.start(now);
+  osc2.start(now);
+  osc.stop(now + 7);
+  osc2.stop(now + 5);
+}
+
 // ─── The Fragments ───
 // Drawn from the deep well of human contemplation across millennia.
 // All texts are from public domain works and ancient oral traditions.
@@ -196,8 +358,8 @@ const fragments = [
     source: "Book of Coming Forth by Day — ancient Egypt, c. 1550 BCE"
   },
   {
-    text: "The moon does not fight.\nIt attacks no one.\nIt does not worry.\nIt does not try to crush others.\nIt keeps to its course.\nBy its very nature,\nit gently influences.",
-    source: "Deng Ming-Dao, after ancient Taoist teaching"
+    text: "The highest good is like water.\nWater gives life to the ten thousand things\nand does not strive.\nIt flows in places men reject\nand so is like the Tao.",
+    source: "Tao Te Ching, verse 8 — Laozi, 6th century BCE"
   },
   {
     text: "There is a thing inherent and natural,\nwhich existed before heaven and earth.\nMotionless and fathomless,\nit stands alone and never changes.\nIt pervades everywhere and never becomes exhausted.\nIt may be regarded as the Mother of the Universe.",
@@ -220,8 +382,8 @@ const fragments = [
     source: "Walt Whitman — Leaves of Grass, 1865"
   },
   {
-    text: "We shall not cease from exploration\nand the end of all our exploring\nwill be to arrive where we started\nand know the place for the first time.",
-    source: "T.S. Eliot — Four Quartets, 1942"
+    text: "That which is above is like that which is below,\nand that which is below is like that which is above,\nto accomplish the miracles of the one thing.",
+    source: "The Emerald Tablet — Hermes Trismegistus, ancient"
   },
   {
     text: "The wild geese do not intend\nto cast their reflection.\nThe water has no mind\nto receive their image.",
@@ -236,8 +398,8 @@ const fragments = [
     source: "Genesis — Hebrew oral tradition, ancient"
   },
   {
-    text: "The real voyage of discovery consists\nnot in seeking new landscapes,\nbut in having new eyes.",
-    source: "Marcel Proust — In Search of Lost Time, 1913"
+    text: "Better than a thousand hollow words\nis one word that brings peace.",
+    source: "Dhammapada, verse 100 — c. 3rd century BCE"
   },
   {
     text: "Fire is the origin of stone.\nBy the fire of the spirit,\nwhen deep within the furthest recess,\na precious jewel is found.",
@@ -248,12 +410,32 @@ const fragments = [
     source: "Brihadaranyaka Upanishad — c. 700 BCE"
   },
   {
-    text: "In the depth of winter,\nI finally learned that within me\nthere lay an invincible summer.",
-    source: "Albert Camus — Return to Tipasa, 1954"
+    text: "One generation passes away,\nand another generation comes;\nbut the earth abides forever.\nThe sun also rises, and the sun goes down,\nand hastens to the place where it arose.",
+    source: "Ecclesiastes 1:4-5 — Hebrew wisdom tradition, ancient"
   },
   {
     text: "You are not a drop in the ocean.\nYou are the entire ocean in a drop.",
     source: "Rumi — 13th century"
+  },
+  {
+    text: "Stars, hide your fires;\nlet not light see\nmy black and deep desires.",
+    source: "Sappho — fragment, c. 600 BCE"
+  },
+  {
+    text: "This is the account of how all was in suspense,\nall calm, in silence;\nall motionless, still,\nand the expanse of the sky was empty.",
+    source: "Popol Vuh — K'iche' Maya creation, ancient"
+  },
+  {
+    text: "I went to the sea shore.\nAt night, alone,\nand I listened.\nThe ocean mumbled something\nand threw a luminous, wandering wave at my feet.\nIt said, hushing: this is the end and the beginning.",
+    source: "Orphic Hymn to the Sea — adapted, ancient Greek"
+  },
+  {
+    text: "All things are full of gods.",
+    source: "Thales of Miletus — c. 600 BCE"
+  },
+  {
+    text: "The soul of man is immortal\nand imperishable.",
+    source: "Plato — The Republic, c. 380 BCE"
   },
 ];
 
@@ -273,27 +455,74 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// Stars
+// Star color temperatures (warm to cool)
+const starColors = [
+  [255, 210, 160],  // warm yellow
+  [255, 235, 220],  // white-warm
+  [220, 225, 255],  // cool white
+  [180, 200, 255],  // blue-white
+  [160, 180, 255],  // cool blue
+];
+
+// Three parallax layers: far (slow, dim, many), mid, near (fast, bright, few)
+const starLayers = [
+  { count: 500, rMin: 0.15, rMax: 0.6,  drift: 0.02,  brightnessMax: 0.5 },
+  { count: 200, rMin: 0.4,  rMax: 1.0,  drift: 0.06,  brightnessMax: 0.75 },
+  { count: 60,  rMin: 0.8,  rMax: 1.5,  drift: 0.12,  brightnessMax: 1.0 },
+];
+
 const stars = [];
-const STAR_COUNT = 600;
-for (let i = 0; i < STAR_COUNT; i++) {
-  stars.push({
-    x: Math.random() * W,
-    y: Math.random() * H,
-    r: Math.random() * 1.2 + 0.2,
-    brightness: Math.random(),
-    speed: Math.random() * 0.0003 + 0.0001,
-    phase: Math.random() * Math.PI * 2
-  });
+for (const layer of starLayers) {
+  for (let i = 0; i < layer.count; i++) {
+    const color = starColors[Math.random() * starColors.length | 0];
+    stars.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      baseX: 0, baseY: 0, // for parallax offset
+      r: Math.random() * (layer.rMax - layer.rMin) + layer.rMin,
+      brightness: Math.random() * layer.brightnessMax,
+      speed: Math.random() * 0.0003 + 0.0001,
+      phase: Math.random() * Math.PI * 2,
+      drift: layer.drift,
+      color: color,
+    });
+    stars[stars.length - 1].baseX = stars[stars.length - 1].x;
+    stars[stars.length - 1].baseY = stars[stars.length - 1].y;
+  }
 }
 
-// Slow drifting nebula colors
-function nebulaColor(t) {
-  const cycle = t * 0.00003;
-  const r = Math.sin(cycle) * 8 + 8;
-  const g = Math.sin(cycle + 2) * 6 + 6;
-  const b = Math.sin(cycle + 4) * 15 + 18;
-  return `rgba(${r|0}, ${g|0}, ${b|0}, 0.4)`;
+// Shooting stars
+const shootingStars = [];
+function maybeSpawnShootingStar() {
+  if (Math.random() < 0.003 && shootingStars.length < 2) {
+    shootingStars.push({
+      x: Math.random() * W * 0.8 + W * 0.1,
+      y: Math.random() * H * 0.4,
+      vx: (2 + Math.random() * 3) * (Math.random() < 0.5 ? 1 : -1),
+      vy: 1.5 + Math.random() * 2,
+      life: 1.0,
+      decay: 0.008 + Math.random() * 0.012,
+      length: 30 + Math.random() * 50,
+    });
+  }
+}
+
+// Nebula clouds (soft radial gradient blobs that drift)
+const nebulae = [];
+for (let i = 0; i < 3; i++) {
+  nebulae.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    radius: 150 + Math.random() * 250,
+    vx: (Math.random() - 0.5) * 0.08,
+    vy: (Math.random() - 0.5) * 0.05,
+    // Blue-violet palette
+    r: 15 + Math.random() * 20 | 0,
+    g: 10 + Math.random() * 15 | 0,
+    b: 40 + Math.random() * 40 | 0,
+    alpha: 0.015 + Math.random() * 0.02,
+    phase: Math.random() * Math.PI * 2,
+  });
 }
 
 // Ripples from presence
@@ -310,6 +539,7 @@ document.addEventListener('mousemove', e => {
 document.addEventListener('click', e => {
   if (document.getElementById('threshold').style.display !== 'none') return;
   ripples.push({ x: e.clientX, y: e.clientY, t: 0, maxR: 150 + Math.random() * 100 });
+  playBell();
 });
 
 document.addEventListener('touchstart', e => {
@@ -317,61 +547,138 @@ document.addEventListener('touchstart', e => {
   ripples.push({ x: touch.clientX, y: touch.clientY, t: 0, maxR: 150 + Math.random() * 100 });
 });
 
+// ─── State ───
+
+let lastMoveTime = Date.now();
+let isStill = false;
+
 // ─── Render loop ───
 
 let time = 0;
+const startTime = Date.now();
 
 function draw() {
   time++;
+  const elapsed = (Date.now() - startTime) / 1000; // seconds since start
+  const evolve = Math.min(elapsed / 1200, 1); // 0→1 over 20 minutes
+
   ctx.globalCompositeOperation = 'source-over';
 
-  // Soft fade (trails)
-  ctx.fillStyle = nebulaColor(time);
+  // Clear to deep black
+  ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
 
-  // Deep background overlay
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-  ctx.fillRect(0, 0, W, H);
+  // Nebula clouds (drawn beneath stars)
+  ctx.globalCompositeOperation = 'lighter';
+  for (const n of nebulae) {
+    n.x += n.vx;
+    n.y += n.vy;
+    // Wrap around edges
+    if (n.x < -n.radius) n.x = W + n.radius;
+    if (n.x > W + n.radius) n.x = -n.radius;
+    if (n.y < -n.radius) n.y = H + n.radius;
+    if (n.y > H + n.radius) n.y = -n.radius;
 
-  // Stars
+    const breathe = Math.sin(time * 0.005 + n.phase) * 0.3 + 1.0;
+    const r = n.radius * breathe;
+    const alpha = n.alpha * (1 + evolve * 0.5); // intensify over time
+    const grd = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r);
+    grd.addColorStop(0, `rgba(${n.r}, ${n.g}, ${n.b}, ${alpha})`);
+    grd.addColorStop(0.5, `rgba(${n.r}, ${n.g}, ${n.b}, ${alpha * 0.3})`);
+    grd.addColorStop(1, 'transparent');
+    ctx.fillStyle = grd;
+    ctx.fillRect(n.x - r, n.y - r, r * 2, r * 2);
+  }
+
+  // Stars with parallax drift
   ctx.globalCompositeOperation = 'lighter';
   for (const s of stars) {
-    const flicker = Math.sin(time * s.speed * 60 + s.phase) * 0.4 + 0.6;
-    const alpha = s.brightness * flicker * 0.8;
+    // Slow drift
+    s.x += s.drift * 0.02;
+    if (s.x > W + 5) s.x = -5;
+
+    // Parallax from mouse
+    const px = (mouseX - W / 2) * s.drift * 0.005;
+    const py = (mouseY - H / 2) * s.drift * 0.005;
+    const sx = s.x + px;
+    const sy = s.y + py;
+
+    const flicker = Math.sin(time * s.speed * 60 + s.phase) * 0.35 + 0.65;
+    const stillBonus = isStill ? 0.15 : 0;
+    const alpha = s.brightness * flicker * (0.7 + evolve * 0.3) + stillBonus;
+
+    // Proximity glow: stars brighten near cursor
+    const dx = sx - mouseX, dy = sy - mouseY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const proximity = dist < 200 ? (1 - dist / 200) * 0.4 : 0;
+
+    const finalAlpha = Math.min(alpha + proximity, 1);
+    const [cr, cg, cb] = s.color;
+
     ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(235, 225, 205, ${alpha})`;
+    ctx.arc(sx, sy, s.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${finalAlpha})`;
     ctx.fill();
 
-    // Subtle glow on brighter stars
-    if (s.r > 0.9) {
+    // Glow halo on brighter/larger stars
+    if (s.r > 0.8) {
       ctx.beginPath();
-      ctx.arc(s.x, s.y, s.r * 3, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(200, 185, 155, ${alpha * 0.08})`;
+      ctx.arc(sx, sy, s.r * 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, ${(finalAlpha * 0.06)})`;
       ctx.fill();
     }
   }
 
-  // Ripples
+  // Shooting stars
+  maybeSpawnShootingStar();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = shootingStars.length - 1; i >= 0; i--) {
+    const ss = shootingStars[i];
+    ss.life -= ss.decay;
+    if (ss.life <= 0) { shootingStars.splice(i, 1); continue; }
+    ss.x += ss.vx;
+    ss.y += ss.vy;
+
+    const tailX = ss.x - ss.vx * ss.length * 0.3;
+    const tailY = ss.y - ss.vy * ss.length * 0.3;
+
+    const grad = ctx.createLinearGradient(ss.x, ss.y, tailX, tailY);
+    grad.addColorStop(0, `rgba(255, 250, 240, ${ss.life * 0.8})`);
+    grad.addColorStop(1, `rgba(200, 200, 255, 0)`);
+    ctx.beginPath();
+    ctx.moveTo(ss.x, ss.y);
+    ctx.lineTo(tailX, tailY);
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // Ripples (multiple concentric rings)
   ctx.globalCompositeOperation = 'lighter';
   for (let i = ripples.length - 1; i >= 0; i--) {
     const r = ripples[i];
-    r.t += 0.008;
+    r.t += 0.006;
     if (r.t >= 1) { ripples.splice(i, 1); continue; }
-    const radius = r.maxR * r.t;
-    const alpha = (1 - r.t) * 0.06;
-    ctx.beginPath();
-    ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(200, 185, 150, ${alpha})`;
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    // Draw 3 concentric rings
+    for (let ring = 0; ring < 3; ring++) {
+      const offset = ring * 0.08;
+      const rt = r.t - offset;
+      if (rt < 0 || rt > 1) continue;
+      const radius = r.maxR * rt;
+      const alpha = (1 - rt) * 0.04;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(200, 185, 150, ${alpha})`;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    }
   }
 
   // Gentle mouse-follow glow on canvas
   ctx.globalCompositeOperation = 'lighter';
-  const grd = ctx.createRadialGradient(mouseX, mouseY, 0, mouseX, mouseY, 120);
-  grd.addColorStop(0, 'rgba(180, 165, 130, 0.015)');
-  grd.addColorStop(1, 'rgba(180, 165, 130, 0)');
+  const grd = ctx.createRadialGradient(mouseX, mouseY, 0, mouseX, mouseY, 150);
+  grd.addColorStop(0, 'rgba(180, 170, 140, 0.012)');
+  grd.addColorStop(1, 'rgba(180, 170, 140, 0)');
   ctx.fillStyle = grd;
   ctx.fillRect(0, 0, W, H);
 
@@ -403,39 +710,131 @@ function showNextWisdom() {
   wisdomEl.classList.remove('visible');
 
   setTimeout(() => {
-    textEl.innerHTML = frag.text.replace(/\n/g, '<br>');
+    // Split into lines and wrap each
+    const lines = frag.text.split('\n');
+    textEl.innerHTML = lines.map(l => `<span class="line">${l}</span>`).join('');
     sourceEl.textContent = '— ' + frag.source;
+    sourceEl.style.opacity = '0';
+    sourceEl.style.transition = 'opacity 2.5s ease-in';
 
     setTimeout(() => {
       wisdomEl.classList.add('visible');
-    }, 800);
 
-    // Visible for 12-16 seconds, then fade
-    const displayTime = 12000 + Math.random() * 4000;
-    setTimeout(() => {
-      wisdomEl.classList.remove('visible');
-      // Wait for fade out, then show next
-      setTimeout(showNextWisdom, 4000 + Math.random() * 3000);
-    }, displayTime);
+      // Reveal each line with a staggered delay
+      const lineEls = textEl.querySelectorAll('.line');
+      const lineDelay = 1800; // ms between each line
+      lineEls.forEach((el, i) => {
+        setTimeout(() => el.classList.add('revealed'), i * lineDelay);
+      });
+
+      // Reveal source after all lines
+      const sourceDelay = lines.length * lineDelay + 1500;
+      setTimeout(() => { sourceEl.style.opacity = '1'; }, sourceDelay);
+
+      // Total display time: line reveals + 10-14s to contemplate
+      const displayTime = sourceDelay + 10000 + Math.random() * 4000;
+      setTimeout(() => {
+        wisdomEl.classList.remove('visible');
+        sourceEl.style.opacity = '0';
+        // Longer silence between fragments (15-22s)
+        setTimeout(showNextWisdom, 15000 + Math.random() * 7000);
+      }, displayTime);
+    }, 800);
   }, 1000);
 }
 
 // ─── Threshold (entry) ───
 
-document.getElementById('threshold').addEventListener('click', () => {
+// Pure darkness for 4 seconds, then text slowly appears
+setTimeout(() => {
+  document.getElementById('threshold').classList.add('text-visible');
+}, 4000);
+
+function crossThreshold(x, y) {
   const threshold = document.getElementById('threshold');
+  if (threshold.classList.contains('dissolving')) return;
   threshold.classList.add('dissolving');
+
+  // Start audio on user gesture (required by browsers)
+  initAudio();
+  playBell();
+
+  // Expanding ring from click point
+  const ring = document.getElementById('threshold-ring');
+  const maxDim = Math.max(window.innerWidth, window.innerHeight) * 2.5;
+  ring.style.left = (x - maxDim / 2) + 'px';
+  ring.style.top = (y - maxDim / 2) + 'px';
+  ring.style.width = '0px';
+  ring.style.height = '0px';
+  ring.style.opacity = '1';
+  ring.style.transition = 'width 3.5s ease-out, height 3.5s ease-out, opacity 3.5s ease-out';
+
+  requestAnimationFrame(() => {
+    ring.style.width = maxDim + 'px';
+    ring.style.height = maxDim + 'px';
+    ring.style.opacity = '0';
+  });
+
+  // Fade the black background via clip-path (shrinking circle reveals cosmos)
+  threshold.style.transition = 'opacity 3s ease-in';
+  setTimeout(() => { threshold.style.opacity = '0'; }, 500);
+
   setTimeout(() => {
     threshold.style.display = 'none';
+    ring.style.display = 'none';
     showNextWisdom();
-  }, 3000);
+  }, 3500);
+}
+
+document.getElementById('threshold').addEventListener('click', e => {
+  crossThreshold(e.clientX, e.clientY);
 });
 
-// Also allow touch
 document.getElementById('threshold').addEventListener('touchend', e => {
   e.preventDefault();
-  document.getElementById('threshold').click();
+  const touch = e.changedTouches[0];
+  crossThreshold(touch.clientX, touch.clientY);
 });
+
+// ─── Stillness Detection ───
+// "be still" only appears when the user is restless (lots of movement)
+
+let moveCount = 0;
+let moveWindow = [];
+const breatheEl = document.getElementById('breathe');
+let breatheVisible = false;
+
+document.addEventListener('mousemove', () => {
+  moveWindow.push(Date.now());
+});
+document.addEventListener('touchmove', () => {
+  moveWindow.push(Date.now());
+});
+
+setInterval(() => {
+  const now = Date.now();
+  // Count moves in the last 3 seconds
+  moveWindow = moveWindow.filter(t => now - t < 3000);
+  const isRestless = moveWindow.length > 60; // ~20 moves/sec = frantic
+
+  if (isRestless && !breatheVisible) {
+    breatheVisible = true;
+    breatheEl.classList.add('visible');
+  } else if (!isRestless && breatheVisible) {
+    breatheVisible = false;
+    breatheEl.classList.remove('visible');
+  }
+}, 1000);
+
+// ─── Stillness reward: if cursor is still for 8+ seconds, stars breathe brighter ───
+document.addEventListener('mousemove', () => { lastMoveTime = Date.now(); isStill = false; });
+document.addEventListener('touchmove', () => { lastMoveTime = Date.now(); isStill = false; });
+
+setInterval(() => {
+  if (Date.now() - lastMoveTime > 8000) {
+    isStill = true;
+  }
+}, 1000);
 
 // ─── Begin ───
 draw();
