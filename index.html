@@ -211,15 +211,48 @@ function initAudio() {
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-  // Master gain — kept quiet, sound is punctuation not texture
+  // Master gain
   const master = audioCtx.createGain();
-  master.gain.value = 0.4;
+  master.gain.value = 0;
   master.connect(audioCtx.destination);
+
+  // Fade master in slowly
+  master.gain.linearRampToValueAtTime(0, audioCtx.currentTime);
+  master.gain.linearRampToValueAtTime(0.35, audioCtx.currentTime + 8);
 
   droneGain = master;
 
-  // No constant drone. Silence is the foundation.
-  // Instead: occasional single tones that emerge from nothing and return to nothing.
+  // Base drone — low fundamental
+  const drone1 = audioCtx.createOscillator();
+  drone1.type = 'sine';
+  drone1.frequency.value = 55; // A1
+  const d1Gain = audioCtx.createGain();
+  d1Gain.gain.value = 0.12;
+  drone1.connect(d1Gain);
+  d1Gain.connect(master);
+  drone1.start();
+
+  // Second drone — perfect fifth above, detuned slightly
+  const drone2 = audioCtx.createOscillator();
+  drone2.type = 'sine';
+  drone2.frequency.value = 82.5; // ~E2, slightly flat
+  const d2Gain = audioCtx.createGain();
+  d2Gain.gain.value = 0.06;
+  drone2.connect(d2Gain);
+  d2Gain.connect(master);
+  drone2.start();
+
+  // LFO for gentle breathing
+  const lfo = audioCtx.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 0.06; // one breath every ~16 seconds
+  const lfoGain = audioCtx.createGain();
+  lfoGain.gain.value = 0.03;
+  lfo.connect(lfoGain);
+  lfoGain.connect(d1Gain.gain);
+  lfo.start();
+
+  // Occasional tones that fade in and out over the drone
   function spawnTone() {
     if (!audioCtx) return;
     const harmonics = [110, 165, 220, 330, 440, 528];
@@ -230,22 +263,21 @@ function initAudio() {
 
     const env = audioCtx.createGain();
     env.gain.value = 0;
-    const peakVol = 0.02 + Math.random() * 0.015;
+    const peakVol = 0.015 + Math.random() * 0.015;
     const now = audioCtx.currentTime;
     env.gain.setValueAtTime(0, now);
-    env.gain.linearRampToValueAtTime(peakVol, now + 4);
-    env.gain.linearRampToValueAtTime(0, now + 10 + Math.random() * 8);
+    env.gain.linearRampToValueAtTime(peakVol, now + 3);
+    env.gain.linearRampToValueAtTime(0, now + 8 + Math.random() * 6);
 
     osc.connect(env);
     env.connect(master);
     osc.start(now);
-    osc.stop(now + 20);
+    osc.stop(now + 15);
 
-    // Next tone in 25-60 seconds — long silences between
-    setTimeout(spawnTone, (25000 + Math.random() * 35000) * timePace);
+    // Next tone in 8-20 seconds
+    setTimeout(spawnTone, (8000 + Math.random() * 12000) * timePace);
   }
-  // First tone after 8 seconds of silence
-  setTimeout(spawnTone, 8000);
+  setTimeout(spawnTone, 3000);
 }
 
 function playBell() {
@@ -533,12 +565,7 @@ const isLateEvening = hour >= 21 || hour < 0;   // 9pm-midnight
 const timePace = isDeepNight ? 1.4 : isDawn ? 0.9 : isDusk ? 1.1 : isLateEvening ? 1.2 : 1.0;
 const timeDarkness = isDeepNight ? 0.6 : isDawn ? 1.1 : isDusk ? 0.85 : 1.0;
 const timeWarmth = isDawn ? 0.15 : isDusk ? 0.1 : 0; // warm edge for golden hours
-let fragmentsSinceEmptying = 0;
 let textParticles = []; // characters dissolving into stars
-let emptyingPhase = 0; // 0 = normal, 1 = dimming, 2 = void, 3 = rebuilding
-let emptyingTimer = 0;
-let emptyingDim = 0; // 0→1 dimming multiplier
-let rebuiltStars = 0;
 
 // ─── Render loop ───
 
@@ -549,49 +576,6 @@ function draw() {
   time++;
   const elapsed = (Date.now() - startTime) / 1000; // seconds since start
   const evolve = Math.min(elapsed / 1200, 1); // 0→1 over 20 minutes
-
-  // ─── The Great Emptying ───
-  if (emptyingPhase === 1) {
-    // Dimming: everything fades over ~8 seconds (480 frames)
-    emptyingTimer++;
-    emptyingDim = Math.min(emptyingTimer / 480, 1);
-    if (emptyingDim >= 1) {
-      emptyingPhase = 2;
-      emptyingTimer = 0;
-      // Mute during the void
-      if (droneGain) {
-        droneGain.gain.setValueAtTime(droneGain.gain.value, audioCtx.currentTime);
-        droneGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 4);
-      }
-    }
-  } else if (emptyingPhase === 2) {
-    // Pure void: hold darkness for 60-90 seconds (3600-5400 frames)
-    emptyingTimer++;
-    emptyingDim = 1;
-    if (emptyingTimer > 3600 + Math.random() * 0.01 * 1800) {
-      emptyingPhase = 3;
-      emptyingTimer = 0;
-      rebuiltStars = 0;
-    }
-  } else if (emptyingPhase === 3) {
-    // Rebuilding: reveal stars one by one
-    emptyingTimer++;
-    // Add ~2-4 stars per frame, so 760 stars rebuild over ~250 frames (~4 seconds)
-    rebuiltStars = Math.min(rebuiltStars + 3, stars.length);
-    emptyingDim = 1 - (rebuiltStars / stars.length);
-    if (rebuiltStars >= stars.length) {
-      emptyingPhase = 0;
-      emptyingDim = 0;
-      emptyingTimer = 0;
-      // Restore sound
-      if (droneGain) {
-        droneGain.gain.setValueAtTime(droneGain.gain.value, audioCtx.currentTime);
-        droneGain.gain.linearRampToValueAtTime(0.4, audioCtx.currentTime + 10);
-      }
-    }
-  }
-
-  const cosmicDim = 1 - emptyingDim; // 1 = full brightness, 0 = void
 
   // Universal breath: 12-second cycle (6s in, 6s out)
   // sin gives -1 to 1, we map to ~0.92 to 1.08 — subtle, felt not seen
@@ -617,7 +601,7 @@ function draw() {
 
     const breathe = Math.sin(time * 0.005 + n.phase) * 0.3 + 1.0;
     const r = n.radius * breathe;
-    const alpha = n.alpha * (1 + evolve * 0.5) * cosmicDim * breath;
+    const alpha = n.alpha * (1 + evolve * 0.5) * breath;
     const grd = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, r);
     grd.addColorStop(0, `rgba(${n.r}, ${n.g}, ${n.b}, ${alpha})`);
     grd.addColorStop(0.5, `rgba(${n.r}, ${n.g}, ${n.b}, ${alpha * 0.3})`);
@@ -628,9 +612,7 @@ function draw() {
 
   // Stars with parallax drift
   ctx.globalCompositeOperation = 'lighter';
-  const visibleStarCount = emptyingPhase === 3 ? rebuiltStars : stars.length;
-  for (let si = 0; si < visibleStarCount; si++) {
-    const s = stars[si];
+  for (const s of stars) {
     // Slow drift
     s.x += s.drift * 0.02;
     if (s.x > W + 5) s.x = -5;
@@ -643,7 +625,7 @@ function draw() {
 
     const flicker = Math.sin(time * s.speed * 60 + s.phase) * 0.35 + 0.65;
     const stillBonus = isStill ? 0.15 : 0;
-    const alpha = (s.brightness * flicker * (0.7 + evolve * 0.3) + stillBonus) * cosmicDim * timeDarkness * breath;
+    const alpha = (s.brightness * flicker * (0.7 + evolve * 0.3) + stillBonus) * timeDarkness * breath;
 
     // Proximity glow: stars brighten near cursor
     const dx = sx - mouseX, dy = sy - mouseY;
@@ -799,7 +781,7 @@ function draw() {
   if (timeWarmth > 0) {
     ctx.globalCompositeOperation = 'lighter';
     const warmGrd = ctx.createRadialGradient(W / 2, H, 0, W / 2, H, H * 1.2);
-    warmGrd.addColorStop(0, `rgba(180, 120, 60, ${timeWarmth * cosmicDim})`);
+    warmGrd.addColorStop(0, `rgba(180, 120, 60, ${timeWarmth})`);
     warmGrd.addColorStop(1, 'transparent');
     ctx.fillStyle = warmGrd;
     ctx.fillRect(0, 0, W, H);
@@ -888,21 +870,8 @@ function showNextWisdom() {
         dissolveTextToStars();
         wisdomEl.classList.remove('visible');
         sourceEl.style.opacity = '0';
-        fragmentsSinceEmptying++;
-
-        // Every 3-4 fragments, trigger the Great Emptying
-        if (fragmentsSinceEmptying >= 3 + (Math.random() * 2 | 0) && emptyingPhase === 0) {
-          fragmentsSinceEmptying = 0;
-          emptyingPhase = 1;
-          emptyingTimer = 0;
-          emptyingDim = 0;
-          // Resume wisdom after the emptying completes (~75-100 seconds)
-          const emptyingDuration = 8000 + 65000 + 5000; // dim + void + rebuild estimate
-          setTimeout(showNextWisdom, emptyingDuration);
-        } else {
-          // Longer silence between fragments (15-22s)
-          setTimeout(showNextWisdom, (15000 + Math.random() * 7000) * timePace);
-        }
+        // Longer silence between fragments (15-22s)
+        setTimeout(showNextWisdom, (15000 + Math.random() * 7000) * timePace);
       }, displayTime);
     }, 800);
   }, 1000);
@@ -1008,11 +977,14 @@ setInterval(() => {
   }
 
   // Deep stillness singularity: 2+ minutes of no movement
-  if (stillDuration > 120000 && !deepStillnessTriggered && emptyingPhase === 0) {
+  if (stillDuration > 120000 && !deepStillnessTriggered) {
     deepStillnessTriggered = true;
 
-    // A faint constellation draws itself at center
-    const cx = W / 2, cy = H / 2;
+    // Pick a random position on screen (away from edges)
+    const cx = W * 0.15 + Math.random() * W * 0.7;
+    const cy = H * 0.15 + Math.random() * H * 0.7;
+
+    // A faint constellation draws itself at a random location
     const points = 5 + (Math.random() * 4 | 0);
     const constellationStars = [];
     for (let i = 0; i < points; i++) {
@@ -1027,10 +999,17 @@ setInterval(() => {
     }
     constellationParticles = constellationStars;
 
-    // After the constellation, show a single word
+    // After the constellation, show a single word at a random position
     setTimeout(() => {
       const word = stillnessWords[stillnessWordIndex % stillnessWords.length];
       stillnessWordIndex++;
+
+      // Position the wisdom element at a random spot
+      const wx = 15 + Math.random() * 70; // 15-85% from left
+      const wy = 15 + Math.random() * 70; // 15-85% from top
+      wisdomEl.style.top = wy + '%';
+      wisdomEl.style.left = wx + '%';
+
       textEl.innerHTML = `<span class="line">${word}</span>`;
       sourceEl.textContent = '';
       sourceEl.style.opacity = '0';
@@ -1040,6 +1019,9 @@ setInterval(() => {
       }, 500);
       setTimeout(() => {
         wisdomEl.classList.remove('visible');
+        // Reset position back to center for normal fragments
+        wisdomEl.style.top = '50%';
+        wisdomEl.style.left = '50%';
       }, 6000);
     }, points * 1200 + 3000);
 
