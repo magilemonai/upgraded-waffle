@@ -151,12 +151,12 @@
     font-size: clamp(0.8rem, 2vw, 1.1rem);
     letter-spacing: 0.25em;
     font-weight: 300;
-    transition: color 4s ease-in, opacity 4s ease-in;
+    transition: color 1.5s ease-in, opacity 1.5s ease-in;
     cursor: pointer;
   }
 
   #threshold.text-visible .enter-text {
-    color: rgba(180, 165, 135, 0.35);
+    color: rgba(180, 165, 135, 0.7);
     animation: pulse-soft 6s ease-in-out infinite;
   }
 
@@ -179,8 +179,8 @@
   }
 
   @keyframes pulse-soft {
-    0%, 100% { opacity: 0.25; }
-    50% { opacity: 0.55; }
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
   }
 </style>
 </head>
@@ -879,10 +879,10 @@ function showNextWisdom() {
 
 // ─── Threshold (entry) ───
 
-// Pure darkness for 4 seconds, then text slowly appears
+// Pure darkness for 2 seconds, then text appears
 setTimeout(() => {
   document.getElementById('threshold').classList.add('text-visible');
-}, 4000);
+}, 2000);
 
 function crossThreshold(x, y) {
   const threshold = document.getElementById('threshold');
